@@ -1,7 +1,7 @@
 import datetime
 import time
 from abc import ABC, abstractmethod
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from typing import List, Optional, Sequence, Tuple
 
 from sqlalchemy.orm import Query
@@ -116,7 +116,7 @@ class DataFeed(ABC):
     ] = None  # A dict/map of group names to mapper objects for translating group data into db types
 
     def __init__(self, metadata: FeedMetadata):
-        self.metadata = metadata
+        self.metadata: FeedMetadata = metadata
 
     @abstractmethod
     def sync(
@@ -126,7 +126,7 @@ class DataFeed(ABC):
         event_client: CatalogClient = None,
         operation_id=None,
         group=None,
-    ) -> dict:
+    ) -> FeedSyncResult:
         """
         Ensure the feed is synchronized. Performs checks per sync item and if item_processing_fn is provided.
         Transaction scope is the update for an entire group.
@@ -145,7 +145,7 @@ class DataFeed(ABC):
         :param group: filter for which groups to update
         :type group: Optional[str], defaults to None
         :return: changed data updated in the sync as a list of records
-        :rtype: dict
+        :rtype: FeedSyncResult
         """
         ...
 
@@ -343,7 +343,7 @@ class AnchoreServiceFeed(DataFeed, ABC):
         group_download_result: GroupDownloadResult,
         full_flush=False,
         local_repo=None,
-    ) -> dict:
+    ) -> GroupSyncResult:
         """
         Sync data from a single group and return the data. This operation is scoped to a transaction on the db.
 
@@ -440,7 +440,7 @@ class AnchoreServiceFeed(DataFeed, ABC):
             )
 
         result.status = "success"
-        return asdict(result)
+        return result
 
     def _flush_group(self, group_obj: FeedGroupMetadata) -> None:
         """
@@ -520,7 +520,7 @@ class AnchoreServiceFeed(DataFeed, ABC):
         event_client: CatalogClient = None,
         operation_id=None,
         group=None,
-    ) -> dict:
+    ) -> FeedSyncResult:
         """
         Sync data with the feed source. This may be *very* slow if there are lots of updates.
 
@@ -541,8 +541,8 @@ class AnchoreServiceFeed(DataFeed, ABC):
         :type operation_id: Optional[str], defaults to None
         :param group: filter for which groups to update
         :type group: Optional[str], defaults to None
-        :return: FeedSyncResult as dict, containing sync results for each group
-        :rtype: dict
+        :return: FeedSyncResult, containing sync results for each group
+        :rtype: FeedSyncResult
         """
         result = FeedSyncResult(feed=self.__feed_name__)
         failed_count = 0
@@ -596,7 +596,7 @@ class AnchoreServiceFeed(DataFeed, ABC):
         if failed_count == 0:
             result.status = "success"
 
-        return asdict(result)
+        return result
 
     def _update_last_full_sync_timestamp(self) -> None:
         """
@@ -937,7 +937,7 @@ class GrypeDBFeed(AnchoreServiceFeed):
         event_client: Optional[CatalogClient] = None,
         operation_id: Optional[str] = None,
         group: Optional[str] = None,
-    ) -> dict:
+    ) -> FeedSyncResult:
         """
         Sync data with the feed source. This may be *very* slow if there are lots of updates.
         Returns a dict with the following structure:
@@ -958,7 +958,7 @@ class GrypeDBFeed(AnchoreServiceFeed):
         :param group: filter for which groups to update
         :type group: Optional[str], defaults to None
         :return: changed data updated in the sync as a list of records
-        :rtype: dict
+        :rtype: FeedSyncResult
         """
         self._catalog_svc_client = event_client
         return super().sync(fetched_data, full_flush, event_client, operation_id, group)
@@ -1111,7 +1111,7 @@ class VulnerabilityFeed(AnchoreServiceFeed):
             )
 
         result.status = "success"
-        return asdict(result)
+        return result
 
     @staticmethod
     def _are_match_equivalent(vulnerability_a, vulnerability_b):
@@ -1268,7 +1268,7 @@ class VulnerabilityFeed(AnchoreServiceFeed):
         event_client: CatalogClient = None,
         operation_id=None,
         group=None,
-    ) -> dict:
+    ) -> FeedSyncResult:
         """
         Sync data with the feed source. This may be *very* slow if there are lots of updates.
 
@@ -1459,10 +1459,10 @@ class NvdFeed(AnchoreServiceFeed):
         event_client: CatalogClient = None,
         operation_id=None,
         group=None,
-    ) -> dict:
+    ) -> FeedSyncResult:
         logger.warn("Sync not supported for legacy nvd feed")
         result = FeedSyncResult(feed="nvd")
-        return asdict(result)
+        return result
 
     def _flush_group(self, group_obj):
         db = get_session()
