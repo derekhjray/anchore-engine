@@ -205,7 +205,7 @@ class AnchoreServiceFeed(DataFeed, ABC):
     :type metadata: Optional[FeedMetadata], defaults to None
     """
 
-    __feed_name__ = None
+    __feed_name__ = "base"
     __group_data_mappers__ = MultiTypeMapperFactory(__feed_name__, {}, None)
     __flush_helper_fn__ = None
 
