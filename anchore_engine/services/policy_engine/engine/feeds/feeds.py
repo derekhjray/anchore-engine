@@ -1522,7 +1522,7 @@ class GithubFeed(VulnerabilityFeed):
     )
 
 
-def feed_instance_by_name(name: str) -> DataFeed:
+def feed_instance_by_name(name: str) -> AnchoreServiceFeed:
     """
     Returns an instance of the feed using the given name, raises KeyError if name not found
 

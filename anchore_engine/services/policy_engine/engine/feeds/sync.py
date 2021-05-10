@@ -408,7 +408,7 @@ class DataFeeds(object):
         catalog_client=None,
         feed_client=None,
         operation_id=None,
-    ):
+    ) -> List[FeedSyncResult]:
         """
         Sync all feeds.
         :return:
