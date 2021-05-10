@@ -980,138 +980,74 @@ class VulnerabilityFeed(AnchoreServiceFeed):
     __vuln_processing_fn__ = process_updated_vulnerability
     __flush_helper_fn__ = flush_vulnerability_matches
 
-    def _sync_group(
+    def _process_group_file_records(
         self,
+        db: Session,
         group_download_result: GroupDownloadResult,
-        full_flush=False,
-        local_repo=None,
-        operation_id=None,
-    ):
+        group_obj: FeedGroupMetadata,
+        local_repo: Optional[LocalFeedDataRepo],
+    ) -> int:
         """
-        Sync data from a single group and return the data. This operation is scoped to a transaction on the db.
-
-        :param group_download_result
-        :return:
+        Convert the download results for a feed group into database records and write to the database session
+        Does not flush, so transaction can be rolled back if an exception is encountered.
+        :param db: sqlalchemy database session
+        :type db: Session
+        :param group_download_result: group download result record to update
+        :type group_download_result: GroupDownloadResult
+        :param group_obj: metadata record for this feed group
+        :type group_obj: FeedGroupMetadata
+        :param local_repo: LocalFeedDataRepo (disk cache for download results)
+        :type local_repo: Optional[LocalFeedDataRepo], defaults to None
+        :return: int
+        :rtype: total number of records updated
         """
-        result = GroupSyncResult(group=group_download_result.group)
-
-        db = get_session()
-        db.refresh(self.metadata)
-        group_db_obj = self.group_by_name(group_download_result.group)
-
-        if not group_db_obj:
-            logger.error(
-                self._log_context.format_msg(
-                    "Skipping group sync. Record not found in db, should have been synced already",
-                )
+        total_records_updated = 0
+        mapper = self._load_mapper(group_obj)
+        # Iterate thru the records and commit
+        count = 0
+        for record in local_repo.read(
+            group_download_result.feed, group_download_result.group, 0
+        ):
+            mapped = mapper.map(record)
+            updated_image_ids = self.update_vulnerability(
+                db,
+                mapped,
+                vulnerability_processing_fn=VulnerabilityFeed.__vuln_processing_fn__,
             )
-            return result
+            db.merge(mapped)
+            total_records_updated += 1
+            count += 1
 
-        sync_started = time.time()
-        download_started = group_download_result.started.replace(
-            tzinfo=datetime.timezone.utc
-        )
+            if len(updated_image_ids) > 0:
+                db.flush()  # Flush after every one so that mem footprint stays small if lots of images are updated
 
-        try:
-            updated_images = (
-                set()
-            )  # To get unique set of all images updated by this sync
-
-            if full_flush:
-                logger.info(
-                    self._log_context.format_msg(
-                        "Performing group data flush prior to sync",
-                    )
-                )
-                self._flush_group(group_db_obj)
-
-            mapper = self._load_mapper(group_db_obj)
-
-            # Iterate thru the records and commit
-            count = 0
-            for record in local_repo.read(
-                group_download_result.feed, group_download_result.group, 0
-            ):
-                mapped = mapper.map(record)
-                updated_image_ids = self.update_vulnerability(
-                    db,
-                    mapped,
-                    vulnerability_processing_fn=VulnerabilityFeed.__vuln_processing_fn__,
-                )
-                updated_images = updated_images.union(
-                    set(updated_image_ids)
-                )  # Record after commit to ensure in-sync.
-                db.merge(mapped)
-                result.updated_record_count += 1
-                count += 1
-
-                if len(updated_image_ids) > 0:
-                    db.flush()  # Flush after every one so that mem footprint stays small if lots of images are updated
-
-                if count >= self.RECORDS_PER_CHUNK:
-                    # Commit
-                    group_db_obj.count = self.record_count(group_db_obj.name, db)
-                    db.commit()
-                    logger.info(
-                        self._log_context.format_msg(
-                            "DB Update Progress: {}/{}".format(
-                                result.updated_record_count,
-                                group_download_result.total_records,
-                            ),
-                        )
-                    )
-                    db = get_session()
-                    count = 0
-
-            else:
-                group_db_obj.count = self.record_count(group_db_obj.name, db)
+            if count >= self.RECORDS_PER_CHUNK:
+                # Commit
+                group_obj.count = self.record_count(group_obj.name, db)
                 db.commit()
                 logger.info(
                     self._log_context.format_msg(
                         "DB Update Progress: {}/{}".format(
-                            result.updated_record_count,
+                            total_records_updated,
                             group_download_result.total_records,
                         ),
                     )
                 )
                 db = get_session()
+                count = 0
 
-            logger.debug(
-                self._log_context.format_msg(
-                    "Updating last sync timestamp to {}".format(download_started),
-                )
-            )
-            group_db_obj = self.group_by_name(group_download_result.group)
-            group_db_obj.last_sync = download_started
-            group_db_obj.count = self.record_count(group_db_obj.name, db)
-            db.add(group_db_obj)
+        else:
+            group_obj.count = self.record_count(group_obj.name, db)
             db.commit()
-        except Exception as e:
-            logger.exception(
-                self._log_context.format_msg(
-                    "Error syncing group",
-                )
-            )
-            db.rollback()
-            raise e
-        finally:
-            result.total_time_seconds = time.time() - download_started.timestamp()
-            sync_time = time.time() - sync_started
             logger.info(
                 self._log_context.format_msg(
-                    "Sync to db duration: {} sec".format(sync_time),
-                )
-            )
-            logger.info(
-                self._log_context.format_msg(
-                    "Total sync, including download, duration: {} sec".format(
-                        result.total_time_seconds
+                    "DB Update Progress: {}/{}".format(
+                        total_records_updated,
+                        group_download_result.total_records,
                     ),
                 )
             )
-
-        result.status = "success"
-        return result
+        return total_records_updated
 
     @staticmethod
     def _are_match_equivalent(vulnerability_a, vulnerability_b):
